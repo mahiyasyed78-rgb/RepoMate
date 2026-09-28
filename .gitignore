@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.local
+.hindsight_local_bank.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+embeddings.json

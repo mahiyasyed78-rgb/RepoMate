@@ -1,0 +1,11 @@
+{
+  "name": "repomate",
+  "version": "1.0.0",
+  "description": "GitHub RepoMate — Memory-Powered AI Engineering Agent",
+  "scripts": {
+    "start": "node backend/server.js",
+    "backend": "npm start --prefix backend",
+    "frontend": "npm run dev --prefix frontend",
+    "test": "npm test --prefix backend"
+  }
+}
