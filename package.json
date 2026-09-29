@@ -1,11 +1,13 @@
 {
   "name": "repomate",
   "version": "1.0.0",
-  "description": "GitHub RepoMate — Memory-Powered AI Engineering Agent",
+  "description": "GitHub RepoMate — Memory-Powered AI Engineering Agent for Hindsight Hackathon",
   "scripts": {
     "start": "node backend/server.js",
     "backend": "npm start --prefix backend",
     "frontend": "npm run dev --prefix frontend",
-    "test": "npm test --prefix backend"
+    "test": "npm test --prefix backend",
+    "health": "node backend/lib/testHackathonHealth.js",
+    "demo": "node backend/lib/testEndToEndDemo.js"
   }
 }

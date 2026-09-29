@@ -22,19 +22,46 @@ import {
   TrendingUp,
   FileCode,
   ShieldCheck,
-  ChevronDown,
-  ChevronUp,
+  ExternalLink,
+  Star,
+  GitFork,
+  LogOut,
+  Mail,
+  Phone,
+  UserCheck,
+  Info,
 } from "lucide-react";
 
 export default function App() {
+  // Sign-In state (persisted in localStorage)
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem("repomate_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [signInForm, setSignInForm] = useState({
+    name: "",
+    phone: "",
+    email: "",
+  });
+  const [signInError, setSignInError] = useState("");
+
   const [activeTab, setActiveTab] = useState("workspace"); // 'workspace' | 'pipeline' | 'memories'
-  const [githubURL, setGithubURL] = useState("https://github.com/ZayeemMohd/taskflowAI");
+  const [githubURL, setGithubURL] = useState("https://github.com/facebook/react");
   const [githubToken, setGithubToken] = useState("");
   const [isIndexing, setIsIndexing] = useState(false);
   const [indexStatus, setIndexStatus] = useState(null);
 
+  // Creator Insight state
+  const [creatorInfo, setCreatorInfo] = useState(null);
+  const [loadingCreator, setLoadingCreator] = useState(false);
+
   // Question & Answer state
-  const [userQuery, setUserQuery] = useState("Why am I getting ERR_MODULE_NOT_FOUND in my ES module script?");
+  const [userQuery, setUserQuery] = useState("Explain the main purpose and core architecture of this repository.");
   const [isAsking, setIsAsking] = useState(false);
   const [answerData, setAnswerData] = useState(null);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -46,8 +73,7 @@ export default function App() {
   const [feedbackResult, setFeedbackResult] = useState(null);
 
   // Pipeline active stage
-  const [activeStage, setActiveStage] = useState("idle"); 
-  // 'idle' | 'repo_ingest' | 'code_summarize' | 'embeddings' | 'dual_retrieve' | 'agent_reason' | 'developer_answer' | 'feedback_store' | 'improved_assistance'
+  const [activeStage, setActiveStage] = useState("idle");
 
   // Stored memories vault
   const [allMemories, setAllMemories] = useState([]);
@@ -56,26 +82,49 @@ export default function App() {
   // Server health
   const [serverHealth, setServerHealth] = useState(null);
 
-  // Check health on mount
+  // Check health, memories, and creator insight on mount
   useEffect(() => {
     fetchHealth();
     fetchMemories();
+    if (githubURL) {
+      fetchCreatorInfo(githubURL);
+    }
   }, []);
 
-  // Resilient multi-tier API caller (Vite proxy -> 127.0.0.1:8080 -> localhost:8080)
+  const API_BASE_URL = "http://localhost:8080";
+
+  // Robust API caller with http://localhost:8080 as primary endpoint
   const apiRequest = async (path, options = {}) => {
-    try {
-      const res = await fetch(`/api${path}`, options);
-      if (res.ok || res.status < 500) return res;
-    } catch {}
+    const defaultHeaders = {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    };
 
-    try {
-      const res = await fetch(`http://127.0.0.1:8080${path}`, options);
-      if (res.ok || res.status < 500) return res;
-    } catch {}
+    const fetchOptions = {
+      ...options,
+      headers: options.body ? defaultHeaders : (options.headers || {}),
+    };
 
-    return fetch(`http://localhost:8080${path}`, options);
+    // 1. Primary: direct connection to http://localhost:8080
+    try {
+      const res = await fetch(`${API_BASE_URL}${path}`, fetchOptions);
+      if (res.ok || res.status < 500) return res;
+    } catch (err) {
+      console.warn(`Direct fetch to ${API_BASE_URL}${path} failed:`, err.message);
+    }
+
+    // 2. Fallback: 127.0.0.1:8080 (in case of Windows localhost IPv6 binding)
+    try {
+      const res = await fetch(`http://127.0.0.1:8080${path}`, fetchOptions);
+      if (res.ok || res.status < 500) return res;
+    } catch (err) {
+      console.warn(`Fallback fetch to http://127.0.0.1:8080${path} failed:`, err.message);
+    }
+
+    // 3. Fallback: Vite /api proxy
+    return fetch(`/api${path}`, fetchOptions);
   };
+
 
   const fetchHealth = async () => {
     try {
@@ -90,7 +139,7 @@ export default function App() {
   const fetchMemories = async () => {
     setLoadingMemories(true);
     try {
-      const res = await apiRequest("/memories?q=error+debugging+module");
+      const res = await apiRequest("/memories?q=error+debugging+architecture");
       const data = await res.json();
       setAllMemories(data.memories || []);
     } catch (err) {
@@ -98,6 +147,82 @@ export default function App() {
     } finally {
       setLoadingMemories(false);
     }
+  };
+
+  // Automatically fetch Creator Insight from GitHub API
+  const fetchCreatorInfo = async (urlToFetch) => {
+    const targetUrl = urlToFetch || githubURL;
+    if (!targetUrl || typeof targetUrl !== "string") return;
+
+    setLoadingCreator(true);
+    try {
+      const res = await apiRequest(`/creator-info?url=${encodeURIComponent(targetUrl)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success) {
+          setCreatorInfo(data);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch creator info:", err.message);
+    } finally {
+      setLoadingCreator(false);
+    }
+  };
+
+  // Handle User Sign-In with Validation
+  const handleSignIn = (e) => {
+    e.preventDefault();
+    setSignInError("");
+
+    const name = signInForm.name.trim();
+    const phone = signInForm.phone.trim();
+    const email = signInForm.email.trim();
+
+    // 1. Name validation (min 2 chars)
+    if (!name || name.length < 2) {
+      setSignInError("Please enter your full name (at least 2 characters).");
+      return;
+    }
+
+    // 2. Phone number validation (digits and optional +, -, spaces, 7-15 digits)
+    const phoneDigits = phone.replace(/\D/g, "");
+    if (!phoneDigits || phoneDigits.length < 7 || phoneDigits.length > 15) {
+      setSignInError("Please enter a valid phone number (7 to 15 digits).");
+      return;
+    }
+
+    // 3. Gmail address validation (must be valid email ending with @gmail.com or @googlemail.com)
+    const emailLower = email.toLowerCase();
+    const gmailRegex = /^[a-zA-Z0-9._%+-]+@(gmail\.com|googlemail\.com)$/;
+    if (!emailLower || !gmailRegex.test(emailLower)) {
+      setSignInError("Please enter a valid Gmail address ending with @gmail.com.");
+      return;
+    }
+
+    const userData = {
+      name,
+      phone,
+      email: emailLower,
+      signedInAt: new Date().toISOString(),
+    };
+
+    try {
+      localStorage.setItem("repomate_user", JSON.stringify(userData));
+    } catch (err) {
+      console.warn("Could not save to localStorage:", err);
+    }
+
+    setCurrentUser(userData);
+  };
+
+  const handleSignOut = () => {
+    try {
+      localStorage.removeItem("repomate_user");
+    } catch {}
+    setCurrentUser(null);
+    setSignInForm({ name: "", phone: "", email: "" });
+    setSignInError("");
   };
 
   // Index Repository
@@ -108,6 +233,9 @@ export default function App() {
     setIsIndexing(true);
     setIndexStatus(null);
     setActiveStage("repo_ingest");
+
+    // Also refresh creator insight
+    fetchCreatorInfo(githubURL);
 
     try {
       const res = await apiRequest("/add-repo", {
@@ -180,7 +308,7 @@ export default function App() {
   // Submit Feedback
   const handleSubmitFeedback = async () => {
     if (solvedStatus === null) {
-      alert("Please select whether the solution was Solved or Not Solved.");
+      alert("Please select whether the solution was Solved (Helpful) or Not Solved (Not Helpful).");
       return;
     }
 
@@ -205,7 +333,7 @@ export default function App() {
       if (res.ok) {
         setFeedbackResult({
           type: "success",
-          message: "Your experience has been saved to RepoMate memory.",
+          message: "Your experience and feedback have been saved to RepoMate memory.",
           outcome: data.outcome,
           lesson: data.lesson,
         });
@@ -233,6 +361,200 @@ export default function App() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  // -------------------------------------------------------------
+  // VIEW: SIGN-IN SCREEN (If user is not signed in)
+  // -------------------------------------------------------------
+  if (!currentUser) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "24px",
+          background: "radial-gradient(circle at 50% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 60%)",
+        }}
+      >
+        <div
+          className="animate-fade-in"
+          style={{
+            width: "100%",
+            maxWidth: "460px",
+            background: "rgba(17, 23, 38, 0.9)",
+            backdropFilter: "blur(16px)",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            borderRadius: "20px",
+            padding: "36px 32px",
+            boxShadow: "0 20px 50px rgba(0, 0, 0, 0.5)",
+          }}
+        >
+          {/* Logo & Header */}
+          <div style={{ textAlign: "center", marginBottom: "28px" }}>
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "16px",
+                background: "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+                boxShadow: "0 8px 24px rgba(99, 102, 241, 0.4)",
+              }}
+            >
+              <Brain size={32} color="#fff" />
+            </div>
+            <h1 style={{ fontSize: "24px", fontWeight: "800", letterSpacing: "-0.5px", marginBottom: "6px" }}>
+              Welcome to <span style={{ color: "#818cf8" }}>RepoMate</span>
+            </h1>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+              Memory-Powered AI GitHub Repository Understanding & Reasoning Agent
+            </p>
+          </div>
+
+          {/* Form */}
+          <form onSubmit={handleSignIn} style={{ display: "grid", gap: "16px" }}>
+            {signInError && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  background: "rgba(244, 63, 94, 0.15)",
+                  border: "1px solid rgba(244, 63, 94, 0.3)",
+                  color: "#fb7185",
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <AlertTriangle size={16} />
+                <span>{signInError}</span>
+              </div>
+            )}
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#cbd5e1", marginBottom: "6px" }}>
+                Full Name
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Alex Johnson"
+                  value={signInForm.name}
+                  onChange={(e) => setSignInForm({ ...signInForm, name: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: "11px 14px 11px 38px",
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "10px",
+                    color: "#fff",
+                    fontSize: "14px",
+                  }}
+                />
+                <User size={16} color="#94a3b8" style={{ position: "absolute", left: "12px", top: "14px" }} />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#cbd5e1", marginBottom: "6px" }}>
+                Phone Number
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  type="tel"
+                  required
+                  placeholder="e.g. +1 (555) 234-5678"
+                  value={signInForm.phone}
+                  onChange={(e) => setSignInForm({ ...signInForm, phone: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: "11px 14px 11px 38px",
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "10px",
+                    color: "#fff",
+                    fontSize: "14px",
+                  }}
+                />
+                <Phone size={16} color="#94a3b8" style={{ position: "absolute", left: "12px", top: "14px" }} />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#cbd5e1", marginBottom: "6px" }}>
+                Gmail Address
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  type="email"
+                  required
+                  placeholder="yourname@gmail.com"
+                  value={signInForm.email}
+                  onChange={(e) => setSignInForm({ ...signInForm, email: e.target.value })}
+                  style={{
+                    width: "100%",
+                    padding: "11px 14px 11px 38px",
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "10px",
+                    color: "#fff",
+                    fontSize: "14px",
+                  }}
+                />
+                <Mail size={16} color="#94a3b8" style={{ position: "absolute", left: "12px", top: "14px" }} />
+              </div>
+              <span style={{ fontSize: "11px", color: "var(--text-subtle)", marginTop: "4px", display: "block" }}>
+                Must be a valid Gmail account (@gmail.com)
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                marginTop: "10px",
+                padding: "12px 20px",
+                background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                color: "#fff",
+                borderRadius: "10px",
+                fontWeight: "700",
+                fontSize: "14px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                boxShadow: "0 4px 16px rgba(79, 70, 229, 0.4)",
+              }}
+            >
+              <UserCheck size={18} />
+              Enter RepoMate Workspace
+            </button>
+          </form>
+
+          <div
+            style={{
+              marginTop: "24px",
+              paddingTop: "18px",
+              borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+              fontSize: "12px",
+              color: "var(--text-subtle)",
+              textAlign: "center",
+            }}
+          >
+            🔒 Privacy First: Your information is kept locally in your session and never exposed.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // MAIN WORKSPACE VIEW (When signed in)
+  // -------------------------------------------------------------
   return (
     <div style={{ maxWidth: "1280px", margin: "0 auto", padding: "24px 20px" }}>
       {/* Top Navbar */}
@@ -289,8 +611,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Status Indicators & Navigation */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+        {/* Status Indicators, User Profile & Navigation */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <div
             style={{
               display: "flex",
@@ -315,33 +637,6 @@ export default function App() {
             <span style={{ color: "var(--text-muted)" }}>Memory Bank:</span>
             <strong style={{ color: "#a5b4fc", fontFamily: "var(--font-mono)" }}>
               {serverHealth?.hindsightBank || "REPOMATE"}
-            </strong>
-          </div>
-
-          {/* MongoDB Database Status Badge */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "12px",
-              background: "var(--bg-tertiary)",
-              padding: "6px 12px",
-              borderRadius: "8px",
-              border: "1px solid var(--border-color)",
-            }}
-          >
-            <Database size={13} color={serverHealth?.mongoDB?.connected ? "#10b981" : "#f59e0b"} />
-            <span style={{ color: "var(--text-muted)" }}>MongoDB:</span>
-            <strong
-              style={{
-                color: serverHealth?.mongoDB?.connected ? "#34d399" : "#fbbf24",
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              {serverHealth?.mongoDB?.connected
-                ? `Connected (${serverHealth.mongoDB.documentsCount || 0})`
-                : "Active (Local Fallback)"}
             </strong>
           </div>
 
@@ -403,6 +698,61 @@ export default function App() {
             >
               <Database size={14} />
               Memory Vault ({allMemories.length})
+            </button>
+          </div>
+
+          {/* User Profile Badge & Sign-Out */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "rgba(30, 41, 59, 0.7)",
+              padding: "4px 10px 4px 6px",
+              borderRadius: "10px",
+              border: "1px solid var(--border-color)",
+            }}
+          >
+            <div
+              style={{
+                width: "28px",
+                height: "28px",
+                borderRadius: "50%",
+                background: "linear-gradient(135deg, #4f46e5, #06b6d4)",
+                color: "#fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "12px",
+                fontWeight: "700",
+              }}
+            >
+              {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : "U"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", textAlign: "left" }}>
+              <span style={{ fontSize: "12px", fontWeight: "700", color: "#f1f5f9", lineHeight: "1.2" }}>
+                {currentUser.name}
+              </span>
+              <span style={{ fontSize: "10px", color: "var(--text-muted)", lineHeight: "1" }}>
+                {currentUser.email}
+              </span>
+            </div>
+            <button
+              onClick={handleSignOut}
+              title="Sign Out"
+              style={{
+                background: "transparent",
+                color: "#94a3b8",
+                padding: "4px",
+                borderRadius: "6px",
+                marginLeft: "4px",
+                display: "flex",
+                alignItems: "center",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "#fb7185")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}
+            >
+              <LogOut size={14} />
             </button>
           </div>
         </div>
@@ -484,138 +834,298 @@ export default function App() {
             </button>
           </div>
 
-          {/* Step 1: Repository Input Card */}
-          <div
-            style={{
-              background: "var(--card-bg)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "16px",
-              padding: "20px 24px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
-              <div
-                style={{
-                  width: "28px",
-                  height: "28px",
-                  borderRadius: "8px",
-                  background: "rgba(99, 102, 241, 0.15)",
-                  color: "#818cf8",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontWeight: "700",
-                  fontSize: "13px",
-                }}
-              >
-                1
-              </div>
-              <h2 style={{ fontSize: "16px", fontWeight: "700" }}>Repository Input & Vector Storage</h2>
-            </div>
-
-            <form onSubmit={handleIndexRepo}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 260px auto", gap: "12px" }}>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "6px" }}>
-                    GitHub Repository URL
-                  </label>
-                  <input
-                    type="url"
-                    value={githubURL}
-                    onChange={(e) => setGithubURL(e.target.value)}
-                    placeholder="https://github.com/user/repository"
-                    required
+          {/* Step 1: Repository Input & Creator Insight Grid */}
+          <div style={{ display: "grid", gridTemplateColumns: creatorInfo ? "1.4fr 1fr" : "1fr", gap: "20px" }}>
+            {/* Repository Input Card */}
+            <div
+              style={{
+                background: "var(--card-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "16px",
+                padding: "20px 24px",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
+                  <div
                     style={{
-                      width: "100%",
-                      padding: "10px 14px",
-                      background: "var(--bg-secondary)",
-                      border: "1px solid var(--border-color)",
+                      width: "28px",
+                      height: "28px",
                       borderRadius: "8px",
-                      color: "#fff",
-                      fontSize: "14px",
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "6px" }}>
-                    GitHub Token (Optional)
-                  </label>
-                  <input
-                    type="password"
-                    value={githubToken}
-                    onChange={(e) => setGithubToken(e.target.value)}
-                    placeholder="ghp_xxxx (for private repos)"
-                    style={{
-                      width: "100%",
-                      padding: "10px 14px",
-                      background: "var(--bg-secondary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: "8px",
-                      color: "#fff",
-                      fontSize: "14px",
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: "flex", alignItems: "flex-end" }}>
-                  <button
-                    type="submit"
-                    disabled={isIndexing}
-                    style={{
-                      padding: "10px 20px",
-                      background: "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
-                      color: "#fff",
-                      borderRadius: "8px",
-                      fontWeight: "600",
-                      fontSize: "14px",
+                      background: "rgba(99, 102, 241, 0.15)",
+                      color: "#818cf8",
                       display: "flex",
                       alignItems: "center",
-                      gap: "8px",
-                      boxShadow: "0 4px 12px rgba(79, 70, 229, 0.3)",
-                      opacity: isIndexing ? 0.7 : 1,
+                      justifyContent: "center",
+                      fontWeight: "700",
+                      fontSize: "13px",
                     }}
                   >
-                    {isIndexing ? (
-                      <>
-                        <RefreshCw size={16} className="animate-spin" />
-                        Indexing Files...
-                      </>
-                    ) : (
-                      <>
-                        <GitBranch size={16} />
-                        Analyze Repository
-                      </>
+                    1
+                  </div>
+                  <h2 style={{ fontSize: "16px", fontWeight: "700" }}>Repository Input & Indexing</h2>
+                </div>
+
+                <form onSubmit={handleIndexRepo}>
+                  <div style={{ display: "grid", gap: "12px" }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "6px" }}>
+                        GitHub Repository URL
+                      </label>
+                      <input
+                        type="url"
+                        value={githubURL}
+                        onChange={(e) => {
+                          setGithubURL(e.target.value);
+                          if (e.target.value.includes("github.com/")) {
+                            fetchCreatorInfo(e.target.value);
+                          }
+                        }}
+                        onBlur={() => fetchCreatorInfo(githubURL)}
+                        placeholder="https://github.com/owner/repository"
+                        required
+                        style={{
+                          width: "100%",
+                          padding: "10px 14px",
+                          background: "var(--bg-secondary)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "8px",
+                          color: "#fff",
+                          fontSize: "14px",
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "6px" }}>
+                          GitHub Token (Optional for Private Repos)
+                        </label>
+                        <input
+                          type="password"
+                          value={githubToken}
+                          onChange={(e) => setGithubToken(e.target.value)}
+                          placeholder="ghp_xxxx"
+                          style={{
+                            width: "100%",
+                            padding: "10px 14px",
+                            background: "var(--bg-secondary)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "8px",
+                            color: "#fff",
+                            fontSize: "14px",
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "flex-end" }}>
+                        <button
+                          type="submit"
+                          disabled={isIndexing}
+                          style={{
+                            padding: "10px 20px",
+                            background: "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
+                            color: "#fff",
+                            borderRadius: "8px",
+                            fontWeight: "600",
+                            fontSize: "14px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            boxShadow: "0 4px 12px rgba(79, 70, 229, 0.3)",
+                            opacity: isIndexing ? 0.7 : 1,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {isIndexing ? (
+                            <>
+                              <RefreshCw size={16} className="animate-spin" />
+                              Indexing...
+                            </>
+                          ) : (
+                            <>
+                              <GitBranch size={16} />
+                              Analyze Repository
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {indexStatus && (
+                    <div
+                      style={{
+                        marginTop: "12px",
+                        padding: "10px 14px",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        background:
+                          indexStatus.type === "success"
+                            ? "rgba(16, 185, 129, 0.1)"
+                            : "rgba(244, 63, 94, 0.1)",
+                        border: `1px solid ${
+                          indexStatus.type === "success" ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"
+                        }`,
+                        color: indexStatus.type === "success" ? "#34d399" : "#fb7185",
+                      }}
+                    >
+                      {indexStatus.type === "success" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                      <span>{indexStatus.message}</span>
+                    </div>
+                  )}
+                </form>
+              </div>
+            </div>
+
+            {/* FEATURE 1: CREATOR INSIGHT CARD */}
+            {creatorInfo && (
+              <div
+                className="animate-fade-in"
+                style={{
+                  background: "linear-gradient(135deg, rgba(30, 27, 75, 0.5) 0%, rgba(17, 23, 38, 0.8) 100%)",
+                  border: "1px solid rgba(129, 140, 248, 0.3)",
+                  borderRadius: "16px",
+                  padding: "20px 24px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Sparkles size={16} color="#818cf8" />
+                      <h3 style={{ fontSize: "14px", fontWeight: "700", color: "#e0e7ff" }}>
+                        Creator & Repo Insight
+                      </h3>
+                    </div>
+                    {creatorInfo.profileUrl && (
+                      <a
+                        href={creatorInfo.profileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          fontSize: "11px",
+                          color: "#818cf8",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          textDecoration: "none",
+                        }}
+                      >
+                        GitHub Profile <ExternalLink size={12} />
+                      </a>
                     )}
-                  </button>
+                  </div>
+
+                  {/* Creator Info Row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "14px", marginBottom: "12px" }}>
+                    <img
+                      src={creatorInfo.avatarUrl}
+                      alt={creatorInfo.name || creatorInfo.username}
+                      style={{
+                        width: "52px",
+                        height: "52px",
+                        borderRadius: "12px",
+                        border: "2px solid rgba(129, 140, 248, 0.4)",
+                        objectFit: "cover",
+                      }}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                    <div>
+                      <h4 style={{ fontSize: "15px", fontWeight: "700", color: "#fff", lineHeight: "1.2" }}>
+                        {creatorInfo.name}
+                      </h4>
+                      <span style={{ fontSize: "12px", color: "#a5b4fc", fontFamily: "var(--font-mono)" }}>
+                        @{creatorInfo.username}
+                      </span>
+                      {creatorInfo.company && (
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "8px" }}>
+                          • {creatorInfo.company}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {creatorInfo.bio && (
+                    <p style={{ fontSize: "12px", color: "#cbd5e1", lineHeight: "1.5", marginBottom: "12px" }}>
+                      {creatorInfo.bio}
+                    </p>
+                  )}
+                </div>
+
+                {/* Badges / Highlights */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", paddingTop: "10px", borderTop: "1px solid rgba(255, 255, 255, 0.06)" }}>
+                  {creatorInfo.repoName && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        background: "rgba(99, 102, 241, 0.15)",
+                        color: "#a5b4fc",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      <Code2 size={12} /> {creatorInfo.repoName}
+                    </span>
+                  )}
+                  {creatorInfo.stars > 0 && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        background: "rgba(245, 158, 11, 0.15)",
+                        color: "#fbbf24",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      <Star size={12} /> {creatorInfo.stars.toLocaleString()} stars
+                    </span>
+                  )}
+                  {creatorInfo.language && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        background: "rgba(6, 182, 212, 0.15)",
+                        color: "#22d3ee",
+                      }}
+                    >
+                      {creatorInfo.language}
+                    </span>
+                  )}
+                  {creatorInfo.publicRepos > 0 && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        background: "rgba(16, 185, 129, 0.15)",
+                        color: "#34d399",
+                      }}
+                    >
+                      {creatorInfo.publicRepos} repos
+                    </span>
+                  )}
                 </div>
               </div>
-
-              {indexStatus && (
-                <div
-                  style={{
-                    marginTop: "12px",
-                    padding: "10px 14px",
-                    borderRadius: "8px",
-                    fontSize: "13px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    background:
-                      indexStatus.type === "success"
-                        ? "rgba(16, 185, 129, 0.1)"
-                        : "rgba(244, 63, 94, 0.1)",
-                    border: `1px solid ${
-                      indexStatus.type === "success" ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"
-                    }`,
-                    color: indexStatus.type === "success" ? "#34d399" : "#fb7185",
-                  }}
-                >
-                  {indexStatus.type === "success" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                  <span>{indexStatus.message}</span>
-                </div>
-              )}
-            </form>
+            )}
           </div>
 
           {/* Step 2: Question Section */}
@@ -648,9 +1158,25 @@ export default function App() {
                 <h2 style={{ fontSize: "16px", fontWeight: "700" }}>Ask RepoMate AI Agent (RAG + Hindsight)</h2>
               </div>
 
-              {/* Quick sample chips for Hackathon demo */}
+              {/* Quick sample chips for demo */}
               <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>Quick Demo Prompts:</span>
+                <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>Quick Prompts:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserQuery("Explain the main purpose and core architecture of this repository.");
+                  }}
+                  style={{
+                    fontSize: "11px",
+                    padding: "4px 10px",
+                    background: "rgba(99, 102, 241, 0.12)",
+                    color: "#a5b4fc",
+                    borderRadius: "6px",
+                    border: "1px solid rgba(99, 102, 241, 0.25)",
+                  }}
+                >
+                  🏛️ Architecture Overview
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -666,22 +1192,6 @@ export default function App() {
                   }}
                 >
                   💡 ERR_MODULE_NOT_FOUND
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserQuery("How do I fix local file import errors in Node.js ES modules?");
-                  }}
-                  style={{
-                    fontSize: "11px",
-                    padding: "4px 10px",
-                    background: "rgba(99, 102, 241, 0.12)",
-                    color: "#a5b4fc",
-                    borderRadius: "6px",
-                    border: "1px solid rgba(99, 102, 241, 0.25)",
-                  }}
-                >
-                  🔁 Memory-Assisted Query
                 </button>
               </div>
             </div>
@@ -876,7 +1386,7 @@ export default function App() {
                       <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#fbbf24" }}>Problem Understanding</h4>
                     </div>
                     <p style={{ fontSize: "13px", color: "#e2e8f0", lineHeight: "1.6" }}>
-                      {answerData.details?.problem || "Identified runtime or syntax issue in codebase."}
+                      {answerData.details?.problem || "Identified question topic in repository."}
                     </p>
                   </div>
 
@@ -890,10 +1400,10 @@ export default function App() {
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
                       <Cpu size={16} color="#f43f5e" />
-                      <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#fb7185" }}>Root Cause</h4>
+                      <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#fb7185" }}>Root Cause / Core Context</h4>
                     </div>
                     <p style={{ fontSize: "13px", color: "#e2e8f0", lineHeight: "1.6" }}>
-                      {answerData.details?.rootCause || "Root cause identified via repository analysis."}
+                      {answerData.details?.rootCause || "Analysis performed via repository source-code extraction."}
                     </p>
                   </div>
                 </div>
@@ -922,17 +1432,19 @@ export default function App() {
                         >
                           <Code2 size={13} color="#818cf8" />
                           <span style={{ color: "#fff" }}>{f.fileName}</span>
-                          <span
-                            style={{
-                              fontSize: "10px",
-                              padding: "2px 6px",
-                              borderRadius: "4px",
-                              background: "rgba(99, 102, 241, 0.2)",
-                              color: "#a5b4fc",
-                            }}
-                          >
-                            {(f.similarityScore * 100).toFixed(1)}% match
-                          </span>
+                          {f.similarityScore !== undefined && (
+                            <span
+                              style={{
+                                fontSize: "10px",
+                                padding: "2px 6px",
+                                borderRadius: "4px",
+                                background: "rgba(99, 102, 241, 0.2)",
+                                color: "#a5b4fc",
+                              }}
+                            >
+                              {(f.similarityScore * 100).toFixed(1)}% match
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -944,7 +1456,7 @@ export default function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                     <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#34d399", display: "flex", alignItems: "center", gap: "6px" }}>
                       <CheckCircle2 size={16} />
-                      Recommended Fix
+                      Recommended Solution / Agent Answer
                     </h4>
                     <button
                       type="button"
@@ -1006,7 +1518,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Step 4: Developer Feedback Section (The Learning Loop) */}
+                {/* FEATURE 4: DEVELOPER FEEDBACK SECTION */}
                 <div
                   style={{
                     background: "var(--bg-secondary)",
@@ -1016,7 +1528,7 @@ export default function App() {
                   }}
                 >
                   <h4 style={{ fontSize: "14px", fontWeight: "700", marginBottom: "4px" }}>
-                    Did this solution solve your problem?
+                    Did this solution solve your problem or provide helpful insight?
                   </h4>
                   <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "14px" }}>
                     Your feedback trains RepoMate's Hindsight memory bank so future answers become even smarter.
@@ -1041,7 +1553,7 @@ export default function App() {
                       }}
                     >
                       <CheckCircle2 size={16} />
-                      ✓ Solved
+                      ✓ Helpful / Solved
                     </button>
 
                     <button
@@ -1062,7 +1574,7 @@ export default function App() {
                       }}
                     >
                       <XCircle size={16} />
-                      ✗ Not Solved
+                      ✗ Not Helpful / Not Solved
                     </button>
                   </div>
 
@@ -1071,7 +1583,7 @@ export default function App() {
                       type="text"
                       value={feedbackNotes}
                       onChange={(e) => setFeedbackNotes(e.target.value)}
-                      placeholder="Additional feedback notes (e.g. Solved on Windows, or required extra flag)..."
+                      placeholder="Additional correction / comment (e.g. Worked with Node 20, or required extra import)..."
                       style={{
                         flex: 1,
                         padding: "8px 14px",
@@ -1094,9 +1606,10 @@ export default function App() {
                         background: "var(--accent-primary)",
                         color: "#fff",
                         opacity: isSubmittingFeedback || solvedStatus === null ? 0.5 : 1,
+                        whiteSpace: "nowrap",
                       }}
                     >
-                      {isSubmittingFeedback ? "Saving Memory..." : "Submit Experience"}
+                      {isSubmittingFeedback ? "Saving Memory..." : "Submit Feedback"}
                     </button>
                   </div>
 
@@ -1332,7 +1845,7 @@ export default function App() {
               {/* Arrow */}
               <div style={{ height: "20px", width: "2px", background: "#475569" }} />
 
-              {/* NODE 7: Vector Storage (embeddings.json) */}
+              {/* NODE 7: Vector Storage */}
               <div
                 style={{
                   width: "360px",
@@ -1513,7 +2026,7 @@ export default function App() {
               {/* Arrow */}
               <div style={{ height: "20px", width: "2px", background: "#475569" }} />
 
-              {/* NODE 11: Developer Feedback Branch (Solved vs Not Solved) */}
+              {/* NODE 11: Developer Feedback Branch */}
               <div
                 style={{
                   width: "100%",
@@ -1539,7 +2052,7 @@ export default function App() {
                       fontSize: "12px",
                     }}
                   >
-                    <strong>✓ Solved</strong>
+                    <strong>✓ Solved / Helpful</strong>
                     <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
                       Outcome: SUCCESS memory
                     </div>
@@ -1554,7 +2067,7 @@ export default function App() {
                       fontSize: "12px",
                     }}
                   >
-                    <strong>✗ Not Solved</strong>
+                    <strong>✗ Not Solved / Unhelpful</strong>
                     <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
                       Outcome: FAILED memory
                     </div>
